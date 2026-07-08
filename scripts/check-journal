@@ -1,0 +1,374 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import ast
+import re
+from pathlib import Path
+
+
+FORBIDDEN_IMPORTS = {
+    "build123d",
+    "cadquery",
+    "cqkit",
+    "OCP",
+    "OCC",
+    "FreeCAD",
+    "openscad",
+}
+
+ROTATING_BLADE_TERMS = ("impeller", "propeller", "turbine", "blisk", "fan", "compressor")
+ADVANCED_GEOMETRY_TERMS = (
+    "revolved_profile",
+    "lofted_blade",
+    "swept_blade",
+    "airfoil_section",
+    "blade_station",
+    "twist_degrees",
+)
+PRIMITIVE_BLADE_TERMS = ("polygon_prism", "oriented_box", "box(")
+EXTERNAL_COMPONENT_TERMS = (
+    r"\bmotor\b",
+    r"\bservo\b",
+    r"\belectrical connector\b",
+    r"\bactuator\b",
+    r"\belectronics board\b",
+    r"\bstandoff\b",
+    r"\bnema\s*\d*",
+    r"\b608(?:zz|rs)?\b",
+)
+SIMPLIFIED_ENVELOPE_TERMS = ("b.cylinder", "b.box", "rounded_box", "simplified envelope", "envelope")
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def compile_file(path: Path) -> list[str]:
+    try:
+        compile(path.read_text(encoding="utf-8"), str(path), "exec")
+    except SyntaxError as exc:
+        return [f"{path}: syntax error line {exc.lineno}: {exc.msg}"]
+    return []
+
+
+def import_root(name: str) -> str:
+    return name.split(".", 1)[0]
+
+
+def call_attr_name(node: ast.Call) -> str | None:
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return None
+
+
+def static_float(node: ast.AST) -> float | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return float(node.value)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        value = static_float(node.operand)
+        return -value if value is not None else None
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd):
+        return static_float(node.operand)
+    return None
+
+
+def static_vector(node: ast.AST) -> tuple[float | None, float | None, float | None] | None:
+    if not isinstance(node, (ast.Tuple, ast.List)) or len(node.elts) != 3:
+        return None
+    return tuple(static_float(elt) for elt in node.elts)
+
+
+def is_axis_aligned_static_vector(vector: tuple[float | None, float | None, float | None]) -> bool:
+    known_nonzero = 0
+    known_zero = 0
+    unknown = 0
+    for value in vector:
+        if value is None:
+            unknown += 1
+        elif abs(value) <= 1e-9:
+            known_zero += 1
+        else:
+            known_nonzero += 1
+
+    if unknown:
+        return known_nonzero <= 1 and known_zero >= 2
+    return known_nonzero == 1
+
+
+def slot_cut_vector_arg(node: ast.Call, name: str, position: int) -> ast.AST | None:
+    for keyword in node.keywords:
+        if keyword.arg == name:
+            return keyword.value
+    if len(node.args) > position:
+        return node.args[position]
+    return None
+
+
+def validate_slot_cut_axes(path: Path, tree: ast.AST) -> list[str]:
+    problems: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or call_attr_name(node) != "slot_cut":
+            continue
+        for name, position in (("axis", 5), ("direction", 6)):
+            arg = slot_cut_vector_arg(node, name, position)
+            if arg is None:
+                continue
+            vector = static_vector(arg)
+            if vector is not None and not is_axis_aligned_static_vector(vector):
+                problems.append(
+                    f"{path}: slot_cut {name} must be axis-aligned; use rectangular_pocket/box cutters "
+                    "for angled cosmetic marks or extend NXBuilder before generating angled slots"
+                )
+    return problems
+
+
+def validate_boolean_overlap_budget(path: Path, tree: ast.AST, source: str) -> list[str]:
+    problems: list[str] = []
+    calls_unite = False
+    calls_subtract = False
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        attr = call_attr_name(node)
+        if attr == "boolean_unite":
+            calls_unite = True
+        elif attr == "boolean_subtract":
+            calls_subtract = True
+
+    if calls_unite and "feature_overlap" not in source:
+        problems.append(
+            f"{path}: boolean_unite calls require a named feature_overlap so united bodies have real volume overlap"
+        )
+    if calls_subtract and "cutter_overlap" not in source and "through_overcut" not in source:
+        problems.append(
+            f"{path}: boolean_subtract calls require a named cutter_overlap or through_overcut so cutters do not merely touch target faces"
+        )
+
+    return problems
+
+
+def call_count(tree: ast.AST, names: set[str]) -> int:
+    count = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and call_attr_name(node) in names:
+            count += 1
+    return count
+
+
+def has_call(tree: ast.AST, name: str) -> bool:
+    return call_count(tree, {name}) > 0
+
+
+def has_boolean_inside_loop(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.For, ast.While)):
+            continue
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call) and call_attr_name(child) in {"boolean_unite", "boolean_subtract"}:
+                return True
+    return False
+
+
+def has_global_axis_fillet(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or call_attr_name(node) != "fillet":
+            continue
+        if not node.args:
+            continue
+        selector = node.args[0]
+        if isinstance(selector, ast.Call) and call_attr_name(selector) in {"get_all_edges", "get_edges_by_axis"}:
+            return True
+    return False
+
+
+def validate_feature_budget(path: Path, tree: ast.AST, source: str) -> list[str]:
+    problems: list[str] = []
+    lower_source = source.lower()
+    looks_like_aerospace_frame = any(
+        token in lower_source
+        for token in ("aerospace", "turbofan", "hpc", "rear frame", "strut_count", "diffuser")
+    )
+    complex_static_count = call_count(tree, {"boolean_unite", "boolean_subtract", "hole"}) >= 24
+    patterned_booleans = has_boolean_inside_loop(tree)
+    if (looks_like_aerospace_frame or complex_static_count or patterned_booleans) and not has_call(
+        tree, "require_feature_budget"
+    ):
+        problems.append(
+            f"{path}: complex aerospace/frame journals require b.require_feature_budget(...) "
+            "with boolean_operations, micro_holes, and patterned_features budgets"
+        )
+    if (looks_like_aerospace_frame or patterned_booleans) and has_global_axis_fillet(tree):
+        problems.append(
+            f"{path}: avoid global fillet after high-pattern boolean features; use local edge selectors "
+            "such as get_edges_in_box(...) or targeted chamfers"
+        )
+    return problems
+
+
+def validate_linkage_semantics(path: Path, tree: ast.AST, source: str) -> list[str]:
+    lower_source = source.lower()
+    lower_name = path.name.lower()
+    looks_like_linkage = any(
+        token in lower_source or token in lower_name
+        for token in ("bellcrank", "flight_control", "flight control", "clevis", "control arm", "linkage")
+    )
+    if not looks_like_linkage:
+        return []
+
+    semantic_helpers = {"bearing_seat", "bushing_boss", "clevis"}
+    if not any(has_call(tree, helper) for helper in semantic_helpers):
+        return [
+            f"{path}: aerospace linkage/bellcrank journals require semantic helpers "
+            "such as b.bearing_seat(...), b.bushing_boss(...), or b.clevis(...)"
+        ]
+    return []
+
+
+def validate_rotating_blade_quality(path: Path, source: str) -> list[str]:
+    lower_source = source.lower()
+    lower_name = path.name.lower()
+    looks_like_rotating_blade = any(
+        token in lower_source or token in lower_name for token in ROTATING_BLADE_TERMS
+    )
+    claims_high_precision = "high_precision" in lower_name or "high_precision" in lower_source or "high precision" in lower_source
+    has_blade_pattern = "blade_count" in lower_source
+    uses_primitive_blades = any(token in lower_source for token in PRIMITIVE_BLADE_TERMS)
+    uses_advanced_geometry = any(token in lower_source for token in ADVANCED_GEOMETRY_TERMS)
+
+    if (
+        looks_like_rotating_blade
+        and claims_high_precision
+        and has_blade_pattern
+        and uses_primitive_blades
+        and not uses_advanced_geometry
+    ):
+        return [
+            f"{path}: primitive-only high-precision rotating blade model: use revolved "
+            "hub/backplate plus named blade stations, airfoil sections, sweep/loft helpers, "
+            "or explicitly downgrade the approximation"
+        ]
+    return []
+
+
+def validate_external_component_ledger(path: Path, source: str) -> list[str]:
+    lower_source = source.lower()
+    mentions_external_component = any(re.search(pattern, lower_source) for pattern in EXTERNAL_COMPONENT_TERMS)
+    uses_simplified_envelope = any(term in lower_source for term in SIMPLIFIED_ENVELOPE_TERMS)
+    has_ledger = "external component ledger:" in lower_source
+
+    if mentions_external_component and uses_simplified_envelope and not has_ledger:
+        return [
+            f"{path}: named external components require an external component ledger "
+            "before using simplified envelope geometry"
+        ]
+    return []
+
+
+def validate_journal(path: Path, *, strict_geometry: bool = False) -> list[str]:
+    problems = compile_file(path)
+    if problems:
+        return problems
+
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    has_build = False
+    has_main = False
+    imports_nxbuilder = False
+    calls_export_step = False
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "build":
+            has_build = True
+        elif isinstance(node, ast.FunctionDef) and node.name == "main":
+            has_main = True
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "export_step":
+                calls_export_step = True
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                root = import_root(alias.name)
+                if root in FORBIDDEN_IMPORTS:
+                    problems.append(f"{path}: forbidden CAD kernel import: {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            root = import_root(module)
+            if root in FORBIDDEN_IMPORTS:
+                problems.append(f"{path}: forbidden CAD kernel import: {module}")
+            if module == "cadnx" and any(alias.name == "NXBuilder" for alias in node.names):
+                imports_nxbuilder = True
+
+    if not has_build:
+        problems.append(f"{path}: missing required build(output_path: str = None)")
+    if not has_main:
+        problems.append(f"{path}: missing required main() entry point")
+    if not imports_nxbuilder:
+        problems.append(f"{path}: expected `from cadnx import NXBuilder`")
+    if not calls_export_step:
+        problems.append(f"{path}: expected a call to NXBuilder.export_step(output_path)")
+    if "/Users/albert/" in source or "copilot-cad-test" in source:
+        problems.append(f"{path}: generated journal must not hardcode local Mac workspace paths")
+    problems.extend(validate_slot_cut_axes(path, tree))
+    if strict_geometry:
+        problems.extend(validate_boolean_overlap_budget(path, tree, source))
+        problems.extend(validate_feature_budget(path, tree, source))
+        problems.extend(validate_linkage_semantics(path, tree, source))
+        problems.extend(validate_rotating_blade_quality(path, source))
+        problems.extend(validate_external_component_ledger(path, source))
+
+    return problems
+
+
+def runtime_files(models_dir: Path) -> list[Path]:
+    runtime = models_dir / "cadnx"
+    return [runtime / "__init__.py", runtime / "builder.py"]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Statically check a generated nx-cad journal and its local runtime."
+    )
+    parser.add_argument("journal", type=Path, help="Generated NXOpen Python journal.")
+    parser.add_argument(
+        "--models-dir",
+        type=Path,
+        help="Directory containing cadnx/. Defaults to the journal parent.",
+    )
+    parser.add_argument(
+        "--strict-geometry",
+        action="store_true",
+        help=(
+            "Reject generated journals that use boolean operations without named "
+            "overlap/overcut budget parameters."
+        ),
+    )
+    args = parser.parse_args()
+
+    journal = args.journal.resolve()
+    if not journal.is_file():
+        print(f"ERROR: journal not found: {journal}")
+        return 2
+
+    models_dir = (args.models_dir.resolve() if args.models_dir else journal.parent)
+    problems = validate_journal(journal, strict_geometry=args.strict_geometry)
+
+    for runtime_file in runtime_files(models_dir):
+        if not runtime_file.is_file():
+            problems.append(f"missing runtime file: {runtime_file}")
+        else:
+            problems.extend(compile_file(runtime_file))
+
+    if problems:
+        print("nx-cad journal check failed:")
+        for problem in problems:
+            print(f"  {problem}")
+        return 1
+
+    print(f"nx-cad journal check passed: {journal}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

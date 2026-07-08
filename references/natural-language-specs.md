@@ -1,0 +1,175 @@
+# Natural-language CAD specs
+
+Read this file when converting a user's prose request into a CAD-NX brief. Do
+not require the user to provide JSON. If the user supplied JSON voluntarily,
+extract the same information but continue the workflow in prose notes and NXOpen
+Python source.
+
+## Contents
+
+- Goal
+- Brief format
+- Example: simple part
+- Example: assembly
+- Clarification policy
+- Success criteria
+
+## Goal
+
+Convert natural-language requirements into an actionable modeling brief before writing source or running tools.
+
+The brief should answer:
+
+- What is being modeled?
+- Is it a part, assembly, modification, inspection task, or secondary output request?
+- What dimensions and units are specified?
+- Which dimensions are missing but inferable?
+- Which features are required?
+- Which manufacturing style best matches the request?
+- Which recognizable part class controls expected features and forbidden
+  shortcuts?
+- Which industrial details are requested, inferred, or unsafe to add?
+- Which faces, axes, origins, joints, or interfaces control positioning?
+- Which functional surfaces, datums, axes, and mating interfaces must remain
+  traceable in the generated journal?
+- Which unsupported geometry is being approximated, and what quality claim must
+  be downgraded if the wrapper lacks the needed operation?
+- What output files are requested?
+- What must be validated before success is reported?
+
+## Brief format
+
+Use concise Markdown notes, not a user-facing structured schema.
+
+Recommended structure:
+
+```text
+CAD brief:
+- Model: <part or assembly name>
+- Output: NXOpen `.py` journal, native `.prt`, and STEP export
+- Units: <explicit or assumed>
+- Coordinate convention: <origin, base plane, up axis>
+- Overall dimensions: <width/depth/height or equivalent>
+- Industrial intent: <machined, molded/enclosure, structural bracket, rotary, generic>
+- Part class: <manifold, bracket, bearing housing, connector, frame, impeller/propeller/blisk, enclosure, generic>
+- Detail budget: <requested details plus conservative inferred details>
+- Functional features: <holes, slots, ribs, bosses, pockets, shells, text, etc.>
+- Functional surfaces/datums: <mounting faces, bores, axes, interface planes, pin centers, blade stations>
+- Approximation level: <exact within wrapper, simplified envelope, segmented approximation, unsupported and deferred>
+- External component ledger: <catalog parts, STEP paths, checksums, datum,
+  transform, mode=imported STEP or simplified envelope>
+- Positioning/mating: <interfaces, datums, child placements, native joint opportunities, alignment rules>
+- Validation targets: <bbox, expected solids/features, key measurements, local static checks, NX runtime checks>
+- Assumptions: <only meaningful inferred choices>
+```
+
+## Industrial interpretation
+
+When the user asks for a refined, realistic, production-like, industrial, or
+professional part, do not merely add global fillets to a primitive. Pick details
+that match the implied manufacturing style:
+
+- machined plates, blocks, mounts, fixtures: chamfers, counterbores, tapped
+  holes, pockets, reliefs, datum-like flat mounting faces, and edge-distance
+  guards;
+- molded housings and enclosures: consistent walls, corner radii, internal
+  bosses, ribs, standoffs, lips/steps, and screw clearances;
+- brackets and structural mounts: reinforced pads, gussets, symmetric hole
+  patterns, lightening slots, and conservative fillets;
+- shafts, spacers, wheels, pulleys: coaxial features, shoulders, bores,
+  end chamfers, and specified set-screw/keyway features;
+- unknown conceptual parts: small chamfers, rounded corners, standard fastener
+  helpers, and parameter guards only.
+
+Treat inferred industrial details as assumptions. Skip them when the prompt
+describes a tight mating envelope, when dimensions are too small for positive
+wall thickness, or when the necessary NXBuilder operation does not exist.
+
+## Example: simple part
+
+User says:
+
+```text
+Make a 100 mm by 60 mm by 6 mm mounting plate with rounded corners, four M4 clearance holes 10 mm in from the corners, and a 20 by 12 mm rectangular cutout in the center.
+```
+
+Agent brief:
+
+```text
+CAD brief:
+- Model: mounting_plate, single NX part with STEP export.
+- Units: millimeters.
+- Origin: center of plate; base plane XY; +Z is thickness direction.
+- Body: rounded rectangular plate, 100 x 60 x 6 mm.
+- Industrial intent: machined mounting plate; use conservative edge refinement
+  and standard fastener features.
+- Corner radius: not specified; assume 3 mm.
+- Holes: four 4.5 mm M4 clearance through-holes, 10 mm in from each corner.
+- Cutout: centered rectangular through-cut, 20 x 12 mm.
+- Detail budget: small top-edge chamfer/fillet if it does not interfere with
+  holes; no unsupported decorative features.
+- Validation: one positive-volume solid, bbox 100 x 60 x 6 mm, four holes, one center cutout, STEP generated by NX.
+- Runtime: journal plus `cadnx/` wrapper copied to NX machine.
+```
+
+## Example: assembly
+
+User says:
+
+```text
+Design a two-piece enclosure, 120 by 80 by 35 mm, with a lid that sits on top and four screw bosses aligned between base and lid.
+```
+
+Agent brief:
+
+```text
+CAD brief:
+- Model: enclosure assembly with base and lid.
+- Units: millimeters.
+- Assembly origin: center of enclosure footprint; +Z upward.
+- Base: hollow lower shell, exterior 120 x 80 mm footprint; height derived from total height minus lid thickness.
+- Lid: separate plate on top; assume 3 mm lid thickness unless user gave another value.
+- Industrial intent: molded/enclosure; keep walls consistent and add only
+  conservative bosses/ribs/lip features supported by NXBuilder.
+- Bosses: four aligned screw bosses; assume M3 unless unspecified dimensions make this unsafe.
+- Detail budget: outside corner radii, internal screw bosses, lid step/lip,
+  and light ribs if wall and clearance guards pass.
+- Positioning: base top face and lid bottom face are mating datums; screw axes must align; explicit NX placements may be used when supported by the wrapper.
+- Validation: labeled base and lid bodies/features where practical, bbox near 120 x 80 x 35 mm, aligned hole/boss axes, NX-generated STEP exists.
+```
+
+## Clarification policy
+
+Ask one focused question only when the missing information affects fit, safety, compliance, or makes the part impossible to model. Otherwise proceed with assumptions and report them.
+
+Ask when:
+
+- No dimensions are provided for a physical object.
+- A mating interface is described but the mating geometry is unspecified.
+- The part is safety-critical, load-bearing, pressure-bearing, medical, or compliance-bound.
+- The requested output depends on an absent source file or missing imported geometry.
+
+Do not ask when:
+
+- A default clearance hole standard is sufficient.
+- A cosmetic fillet radius can be safely assumed.
+- Origin/orientation can be chosen and reported.
+- The user is asking for a conceptual first-pass CAD model.
+
+## Success criteria
+
+A brief is ready for modeling when it contains enough information to define:
+
+- source file path
+- STEP target path
+- units
+- local coordinate system
+- named parameters
+- feature plan
+- labels
+- expected bounding box or key measurements
+- part class and manufacturing style
+- functional surfaces, datums, axes, and mating interfaces
+- approximation level and unsupported geometry risks
+- validation targets, including NX runtime questions
+- NX runtime copy target
