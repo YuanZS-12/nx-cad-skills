@@ -7,7 +7,8 @@ Read this before reporting success for generated NXOpen journals.
 Local validation can prove source structure and runtime freshness. It cannot
 prove Siemens NX execution, native `.prt` save, or STEP export unless the
 journal was actually run inside NX and the user or automation reports the
-result.
+result. `dc_run_journal` output from the Designcenter/NXOpen MCP server counts
+as NX runtime evidence when that MCP server is available.
 
 ## Local Static Validation
 
@@ -42,7 +43,16 @@ Before coding, list what should be checked in NX:
 
 ## NX Runtime Validation
 
-When the user runs the journal in Siemens NX, ask for:
+When `dc_run_journal` is available, run it after local static checks and record:
+
+- whether NX executed the journal;
+- whether warnings or tracebacks were printed;
+- whether `.prt` save was reported;
+- whether `.step` export was reported;
+- output paths reported by the journal.
+
+When MCP runtime tools are unavailable and the user runs the journal manually
+in Siemens NX, ask for:
 
 - whether geometry appears;
 - whether warnings were printed;
@@ -92,6 +102,7 @@ Final responses for NX CAD generation should include:
 - synced `cadnx/` path;
 - static checks actually run;
 - NX runtime result when available;
+- exact `dc_*` MCP tools called when MCP runtime mode was used;
 - CAD `scripts/inspect refs`, `scripts/snapshot`, and `$cad-viewer` results for
   any NX-exported STEP that exists;
 - assumptions and important dimensions;

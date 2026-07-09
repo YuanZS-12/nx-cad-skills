@@ -1,36 +1,70 @@
 # Designcenter/NXOpen MCP Runtime
 
-Read this when the Designcenter/NXOpen MCP server tools are available in the
-agent environment. The MCP server provides NXOpen API discovery, pattern lookup,
-snippet execution, and full journal execution through the local NX machine.
+Read this when the Designcenter/NXOpen MCP server may be available. The MCP
+server is the preferred path for NXOpen API discovery, snippet trials, and
+executing finished journals on a local NX machine.
 
-## Principle
+## MCP Discovery Gate
 
-Use MCP tools to close the NX feedback loop, but keep the `nx-cad` modeling
-contract intact:
+At the start of an NX-machine task, determine whether these tools are exposed
+in the current agent session:
 
-- Generate portable NXOpen Python journals that use `cadnx.NXBuilder`.
-- Prefer wrapper calls over scattered raw NXOpen code.
-- Use MCP API tools before adding unsupported raw NXOpen operations.
-- Run local static checks before NX runtime execution.
-- Report only MCP calls and NX runtime results that actually ran.
+- `dc_lookup_pattern`
+- `dc_search`
+- `dc_semantic_search`
+- `dc_get_api_info`
+- `dc_list_namespace`
+- `dc_run_snippet`
+- `dc_run_journal`
 
-If MCP tools are unavailable, fall back to the normal static-only workflow in
-`validation.md`.
+If any `dc_*` tools are available, enter MCP runtime mode. If none are
+available, say this before generating code:
+
+```text
+Designcenter/NXOpen MCP tools are not available in this agent session; using
+static-only nx-cad workflow.
+```
+
+Do not wait until the final response to reveal missing MCP tools.
+
+## Runtime Modes
+
+**MCP runtime mode** is active when one or more `dc_*` tools are exposed. In
+this mode, MCP is runtime evidence and `dc_run_journal` is the default
+post-static-check execution path.
+
+**Static-only mode** is active when no `dc_*` tools are exposed. In this mode,
+generate portable NX journals, run local static checks, and tell the user which
+`.py` journal and sibling `cadnx/` folder to run on the NX machine. Do not claim
+NX execution.
+
+## Minimum MCP Use
+
+In MCP runtime mode:
+
+1. Use at least one discovery tool before generating or modifying NXOpen code:
+   `dc_search`, `dc_semantic_search`, or `dc_lookup_pattern`.
+2. Use `dc_get_api_info` before writing raw `NXOpen.*` calls or extending
+   `cadnx.NXBuilder`.
+3. Use `dc_run_snippet` before embedding risky newly researched API fragments,
+   such as builder setup, collectors, enum values, color lookup, save, or STEP
+   export behavior.
+4. Run `dc_run_journal` after `sync-runtime` and `check-journal` pass unless
+   the user explicitly asks not to execute NX.
+
+Do not call all seven tools mechanically. Use the minimum set that proves API
+shape and runtime behavior.
 
 ## Tool Triggers
 
-Use the seven Designcenter/NXOpen MCP tools by need, not mechanically on every
-task.
-
 | Tool | Use when |
 | --- | --- |
-| `dc_lookup_pattern` | You need known Designcenter/NXOpen journal pitfalls, color table facts from `ugcolor.cdf`, color names/indices, or best-practice patterns. |
+| `dc_lookup_pattern` | You need known Designcenter/NXOpen journal pitfalls, color facts from `ugcolor.cdf`, color names/indices, or best-practice patterns. |
 | `dc_search` | You know likely NXOpen class, method, builder, or enum names and need matching API entries. |
 | `dc_semantic_search` | You know the modeling intent but not the API name, such as "create a chamfer", "export STEP", or "set body color". |
-| `dc_get_api_info` | You are about to write or revise raw NXOpen code and must confirm constructor shape, method signatures, enum names, properties, return types, or builder lifecycle. |
-| `dc_list_namespace` | Search results are too broad or incomplete and browsing an API family such as `NXOpen.Features`, `NXOpen.UF`, or `NXOpen.Assemblies` would narrow the path. |
-| `dc_run_snippet` | A small risky fragment should be tested before embedding it in a full journal: builder creation, collector setup, enum assignment, color lookup, save/export behavior, or a new wrapper helper. |
+| `dc_get_api_info` | You are about to write or revise raw NXOpen code and must confirm constructors, methods, enum names, properties, return types, or builder lifecycle. |
+| `dc_list_namespace` | Search results are broad or incomplete and browsing an API family such as `NXOpen.Features`, `NXOpen.UF`, or `NXOpen.Assemblies` would narrow the path. |
+| `dc_run_snippet` | A risky fragment should be tested before embedding it in a full journal. |
 | `dc_run_journal` | The generated journal passed static checks and should be executed in NX to verify native runtime behavior, `.prt` save, and STEP export. |
 
 ## API Research Flow
@@ -48,9 +82,8 @@ When extending `cadnx.NXBuilder` or writing unavoidable raw NXOpen code:
    exact shape will be written into code.
 4. Use `dc_lookup_pattern` for known journal pitfalls, color-table behavior, or
    Designcenter-specific recommendations.
-5. Record any durable compatibility lesson in
-   `references/nxopen-common-errors.md` or
-   `references/nx-runtime-feedback-ledger.md` when it will help future repairs.
+5. Record durable compatibility lessons in `references/nxopen-common-errors.md`
+   or `references/nx-runtime-feedback-ledger.md` when they help future repairs.
 
 ## Runtime Validation Flow
 
@@ -74,63 +107,36 @@ After generating or repairing a journal:
    skills/nx-cad/scripts/check-journal models/<journal>.py --strict-geometry
    ```
 
-3. Use `dc_run_snippet` before the full journal only when a newly researched
-   raw API fragment is risky enough to isolate.
+3. Use `dc_run_snippet` only when a newly researched raw API fragment is risky
+   enough to isolate.
 4. Use `dc_run_journal` on the complete generated journal.
-5. If the journal fails in NX, classify the traceback with `repair-loop.md`,
-   patch the smallest responsible section, sync runtime again, rerun local
-   checks, and rerun `dc_run_journal`.
+5. If NX fails, classify the traceback with `repair-loop.md`, patch the
+   smallest responsible section, sync runtime again, rerun local checks, and
+   rerun `dc_run_journal`.
 
-## Snippet Policy
+## MCP Evidence Report
 
-Keep snippets short and disposable. They should answer one API question, not
-become an alternate source of truth for the model.
+When MCP runtime mode was used, the final response must list:
 
-Good snippet targets:
+- exact `dc_*` tools actually called;
+- API or pattern facts learned from MCP;
+- snippet results, if any;
+- `dc_run_journal` result;
+- NX traceback or success output;
+- generated `.prt` and `.step` paths when reported.
 
-- Does this builder/property/enum exist in the local NX version?
-- Does a color lookup or color index behave as expected?
-- Does a save/export method accept the expected path and options?
-- Does a collector/rule pattern initialize without traceback?
+When MCP tools were expected but unavailable, the final response must state
+that static-only validation was performed and must not claim NX execution.
 
-Avoid snippets that create large permanent model state unless that is the
-specific behavior being tested. Prefer a full generated journal for complete
-geometry validation.
+## Integration Test Prompt
 
-## Journal Execution Policy
+Use a small model to test whether Copilot is actually calling MCP:
 
-`dc_run_journal` is the preferred NX runtime proof on machines where the MCP
-server is configured. Treat its output as runtime evidence and include it in
-the final response.
+```text
+/nx-cad Create a 60 x 40 x 8 mm NXOpen mounting plate with four M5 clearance
+holes and export STEP.
 
-Report:
-
-- whether NX executed the journal;
-- whether `.prt` save was reported;
-- whether STEP export was reported;
-- any warning or traceback;
-- the output paths produced by the journal.
-
-Do not claim visual correctness, manufacturability, or watertight solids from
-`dc_run_journal` alone. If a STEP exists, use the CAD inspection and viewer
-handoff workflow from `validation.md` when available.
-
-## Fallback Policy
-
-If any MCP tool is unavailable, fails to start, or cannot reach NX:
-
-- Continue with static validation when possible.
-- State which MCP tool was unavailable or failed.
-- Do not claim NX execution.
-- Tell the user which `.py` journal and `cadnx/` folder to copy or rerun on the
-  NX machine.
-
-## Final Response Additions
-
-When MCP runtime was used, include:
-
-- API discovery tools used for unsupported raw NXOpen code;
-- snippet checks that actually ran;
-- `dc_run_journal` result and output paths;
-- remaining NX warnings or repair notes;
-- whether post-export STEP inspection/viewer review was performed.
+Before writing code, check whether Designcenter/NXOpen MCP tools are available.
+If available, call one API discovery tool and run dc_run_journal after static
+checks. If unavailable, stop and report that before generating code.
+```

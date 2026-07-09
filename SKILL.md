@@ -7,9 +7,10 @@ description: Generate Siemens NXOpen Python journals from natural-language CAD s
 > Copy the generated journal plus its sibling `cadnx/` folder to a machine with
 > Siemens NX installed, then run via NX: File -> Execute -> NX Open. NX builds
 > the model, saves a native `.prt`, and exports a `.step`.
-> When the Designcenter/NXOpen MCP server tools are available, use them as the
-> preferred API research and NX runtime validation path instead of asking the
-> user to run the journal manually.
+> On NX machines where Designcenter/NXOpen MCP tools are expected, start every
+> task by checking whether the `dc_*` tools are exposed in the current agent
+> session. If they are available, use MCP runtime mode. If they are unavailable,
+> say so before continuing in static-only mode.
 
 # NX CAD Generation
 
@@ -117,11 +118,12 @@ Generated journals should call `NXBuilder` rather than raw NXOpen APIs. If a
 model needs an unsupported operation, first extend `cadnx.NXBuilder` using only
 officially documented NXOpen APIs, then sync the runtime and validate locally.
 
-When Designcenter/NXOpen MCP tools are available, use
-`references/mcp-runtime.md` before adding or revising raw NXOpen wrapper code.
-Use MCP search and API-info tools to confirm official API shape, snippet tools
-to test risky fragments, and journal execution tools to validate the complete
-generated output inside NX.
+When Designcenter/NXOpen MCP tools are expected or available, read
+`references/mcp-runtime.md` before planning or coding. In MCP runtime mode, use
+MCP discovery tools before generating or modifying NXOpen code, use
+`dc_get_api_info` before raw NXOpen calls, and run the finished journal with
+`dc_run_journal` after static checks unless the user explicitly forbids NX
+execution.
 
 ## Natural-Language Specs Only
 
@@ -162,7 +164,13 @@ journal on the NX machine.
 
 1. Classify the request: new part, assembly, modification, NX repair, or export
    issue.
-2. Load only the needed references:
+2. Run the MCP discovery gate from `references/mcp-runtime.md` when
+   Designcenter/NXOpen MCP tools are expected, the user mentions MCP, or the
+   task is running on an NX machine:
+   - if any `dc_*` tools are exposed, enter MCP runtime mode;
+   - if none are exposed, state that before writing code and continue in
+     static-only mode.
+3. Load only the needed references:
    - official Siemens API source mapping:
      `references/official-nxopen-sources.md`
    - natural-language brief: `references/natural-language-specs.md`
@@ -184,12 +192,12 @@ journal on the NX machine.
    - repeated API failures: `references/nxopen-common-errors.md`
    - benchmark regression work: `references/benchmark-workflow.md`
    - catalog STEP components: `references/external-step-parts.md`
-3. Create a concise internal CAD-NX brief: independent parameters, derived
+4. Create a concise internal CAD-NX brief: independent parameters, derived
    parameters, coordinate convention, industrial intent, manufacturing style,
    feature order, external component ledger, output name, assumptions, local
    static validation, official API source needs, and NX runtime validation
    targets.
-4. Plan before coding:
+5. Plan before coding:
    - primary solids before holes/cutouts;
    - functional and manufacturability details before cosmetic-only details;
    - booleans before cosmetic detail;
@@ -200,26 +208,31 @@ journal on the NX machine.
    - fillets/chamfers last and conservative;
    - official-source review and wrapper extension needed before raw NXOpen
      calls.
-5. Generate a single NXOpen Python journal using
+6. In MCP runtime mode, use at least one discovery tool
+   (`dc_search`, `dc_semantic_search`, or `dc_lookup_pattern`) before writing
+   the journal. Use `dc_get_api_info` before any raw NXOpen API or wrapper
+   extension. If MCP tools are unavailable, do not fabricate MCP evidence.
+7. Generate a single NXOpen Python journal using
    `templates/nxopen_part_template.py`.
-6. Save the journal under `<repo>/models/<task_name>.py`.
-7. Sync the runtime wrapper:
+8. Save the journal under `<repo>/models/<task_name>.py`.
+9. Sync the runtime wrapper:
    `skills/nx-cad/scripts/sync-runtime --models-dir models`.
-8. Run local static checks:
+10. Run local static checks:
    `skills/nx-cad/scripts/check-journal models/<task_name>.py`.
    For newly generated industrial/mechanical journals, also run strict geometry
    budget checks:
    `skills/nx-cad/scripts/check-journal models/<task_name>.py --strict-geometry`.
-9. If Designcenter/NXOpen MCP tools are available, follow
-   `references/mcp-runtime.md`: use `dc_run_snippet` for risky new API
-   fragments, then use `dc_run_journal` to execute the full journal in NX and
-   collect runtime output.
-10. If MCP runtime tools are unavailable, do not claim NX execution. Tell the
+11. In MCP runtime mode, follow `references/mcp-runtime.md`: use
+   `dc_run_snippet` for risky new API fragments, then run `dc_run_journal` on
+   the full journal and collect runtime output. Do this by default unless the
+   user explicitly asks not to execute NX.
+12. If MCP runtime tools are unavailable, do not claim NX execution. Tell the
    user exactly which journal and sibling `cadnx/` folder to copy to the NX
    machine.
-11. If MCP or the user reports an NX traceback, repair the smallest responsible section
-   of either the generated journal or `cadnx/builder.py`, sync `models/cadnx/`,
-   and ask them to rerun in NX.
+13. If MCP or the user reports an NX traceback, repair the smallest responsible
+   section of either the generated journal or `cadnx/builder.py`, sync
+   `models/cadnx/`, and rerun `dc_run_journal` in MCP runtime mode. In
+   static-only mode, ask the user to rerun in NX.
 
 ## NXOpen Code Rules
 
@@ -337,6 +350,8 @@ When NX reports an error:
 - Never claim a journal has run in NX unless it actually did.
 - Treat `dc_run_journal` output as NX runtime evidence when the
   Designcenter/NXOpen MCP server is available.
+- Never imply MCP was used unless the final answer lists the actual `dc_*`
+  tools that were called.
 - Never hardcode Mac workspace paths into generated journals.
 - Report only checks that actually ran.
 
@@ -371,9 +386,9 @@ Load these files only when their trigger applies:
 - `references/repair-loop.md` - failure classification and source-vs-wrapper
   repair policy.
 - `references/nxopen-export-step.md` - `.prt` save and STEP export behavior.
-- `references/mcp-runtime.md` - Designcenter/NXOpen MCP tool triggers, API
-  research flow, snippet validation, journal execution, and runtime repair
-  policy.
+- `references/mcp-runtime.md` - MCP discovery gate, runtime-vs-static mode
+  selection, required MCP evidence, tool triggers, API research flow, snippet
+  validation, journal execution, and runtime repair policy.
 - `references/nxopen-common-errors.md` - known NXOpen Python compatibility
   errors from this user's NX environment.
 - `references/nx-runtime-feedback-ledger.md` - user- or automation-reported NX
@@ -383,5 +398,5 @@ Load these files only when their trigger applies:
 
 Final responses should include generated `.py` path, `models/cadnx/` sync
 status, syntax checks actually run, Designcenter/NXOpen MCP runtime result when
-available, assumptions, and exactly what to copy to the NX machine when MCP
-runtime execution was unavailable.
+available, the exact `dc_*` tools called, assumptions, and exactly what to copy
+to the NX machine when MCP runtime execution was unavailable.

@@ -16,8 +16,11 @@ runtime wrapper import, during modeling, or during STEP export.
    skills/nx-cad/scripts/check-journal models/<journal>.py
    ```
 
-5. Ask the user to rerun the same journal in NX.
-6. Record new NX compatibility failures in `references/nxopen-common-errors.md`.
+5. If `dc_run_journal` is available, rerun the same journal in NX through MCP
+   and continue the loop from its output.
+6. If MCP runtime tools are unavailable, ask the user to rerun the same journal
+   in NX.
+7. Record new NX compatibility failures in `references/nxopen-common-errors.md`.
 
 ## Failure Classes
 
@@ -130,5 +133,6 @@ Tell the user:
 - which file changed;
 - which runtime folder was synced;
 - which local checks ran;
+- which `dc_*` tools reran, if MCP runtime mode was available;
 - which file to copy to the NX machine;
 - what the next NX rerun should prove.
