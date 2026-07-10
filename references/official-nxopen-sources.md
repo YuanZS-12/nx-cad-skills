@@ -43,6 +43,15 @@ When adding a wrapper operation, update this file with the official page used
 for each new NXOpen object family and report the real Siemens NX execution
 status separately.
 
+## Raw Journal Evidence
+
+Raw NXOpen journal code may be generated without first wrapping every API in
+`NXBuilder`. In that path, the generated or repaired journal must carry either
+`MCP_API_REVIEW` evidence that lists the `dc_*` tools and API facts checked, or
+`STATIC_ONLY_NXOPEN_REVIEW` when MCP tools were unavailable. This file remains
+the durable source map for recurring API families; MCP evidence is the
+per-journal proof that specific raw calls were reviewed before handoff.
+
 ## Journal Session And Part Sources
 
 - `NXOpen.Session`

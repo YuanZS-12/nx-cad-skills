@@ -61,3 +61,11 @@ shell assumptions, missing screw boss wall checks.
 - List features that are functional versus cosmetic.
 - State approximation level for unsupported geometry.
 - Define local static checks and NX runtime checks before coding.
+
+## Misleading Primitive Approximation
+
+Do not claim high-fidelity smooth, aerodynamic, ergonomic, organic, or freeform
+geometry when the journal is mainly boxes, cylinders, polygon prisms, and
+booleans. If the user explicitly asks for a rough or printable blockout, set and
+report a low-fidelity fallback. Otherwise use raw NXOpen advanced geometry with
+MCP API-review evidence.

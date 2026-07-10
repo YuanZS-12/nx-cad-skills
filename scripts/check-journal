@@ -38,6 +38,27 @@ EXTERNAL_COMPONENT_TERMS = (
     r"\b608(?:zz|rs)?\b",
 )
 SIMPLIFIED_ENVELOPE_TERMS = ("b.cylinder", "b.box", "rounded_box", "simplified envelope", "envelope")
+RAW_NXOPEN_ALLOWED_REVIEW_MARKERS = ("MCP_API_REVIEW", "STATIC_ONLY_NXOPEN_REVIEW")
+SMOOTH_HIGH_FIDELITY_TERMS = (
+    "smooth",
+    "airfoil",
+    "blade",
+    "vane",
+    "impeller",
+    "propeller",
+    "loft",
+    "sweep",
+    "curved",
+    "organic",
+    "freeform",
+    "ergonomic",
+)
+RAW_ADVANCED_NXOPEN_TERMS = (
+    "CreateThroughCurvesBuilder",
+    "CreateSweptBuilder",
+    "CreateStudioSplineBuilder",
+    "CreateStudioSurfaceBuilder",
+)
 
 
 def repo_root() -> Path:
@@ -54,6 +75,25 @@ def compile_file(path: Path) -> list[str]:
 
 def import_root(name: str) -> str:
     return name.split(".", 1)[0]
+
+
+def imports_raw_nxopen(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "NXOpen" or alias.name.startswith("NXOpen."):
+                    return True
+        elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("NXOpen"):
+            return True
+    return False
+
+
+def uses_nxbuilder(source: str) -> bool:
+    return "NXBuilder" in source or "from cadnx import NXBuilder" in source
+
+
+def is_low_fidelity_fallback(source: str) -> bool:
+    return "LOW_FIDELITY_FALLBACK" in source
 
 
 def call_attr_name(node: ast.Call) -> str | None:
@@ -184,6 +224,9 @@ def has_global_axis_fillet(tree: ast.AST) -> bool:
 
 
 def validate_feature_budget(path: Path, tree: ast.AST, source: str) -> list[str]:
+    if is_low_fidelity_fallback(source):
+        return []
+
     problems: list[str] = []
     lower_source = source.lower()
     looks_like_aerospace_frame = any(
@@ -266,6 +309,52 @@ def validate_external_component_ledger(path: Path, source: str) -> list[str]:
     return []
 
 
+def validate_raw_nxopen_review_markers(path: Path, tree: ast.AST, source: str) -> list[str]:
+    if not imports_raw_nxopen(tree):
+        return []
+    if any(marker in source for marker in RAW_NXOPEN_ALLOWED_REVIEW_MARKERS):
+        return []
+    return [
+        f"{path}: raw NXOpen journals require MCP_API_REVIEW evidence or STATIC_ONLY_NXOPEN_REVIEW"
+    ]
+
+
+def validate_raw_nxopen_diagnostics(path: Path, tree: ast.AST, source: str) -> list[str]:
+    if not imports_raw_nxopen(tree):
+        return []
+    problems: list[str] = []
+    if "create_work_part_if_needed" not in source and "Parts.Work" in source:
+        problems.append(f"{path}: raw NXOpen journals should guard missing work parts with create_work_part_if_needed")
+    if "print(" not in source:
+        problems.append(f"{path}: raw NXOpen journals should print runtime diagnostics for part/body/export state")
+    uses_raw_builder_factory = any(token in source for token in RAW_ADVANCED_NXOPEN_TERMS) or re.search(
+        r"\.Create[A-Za-z0-9_]*Builder\(",
+        source,
+    )
+    if ".Destroy()" not in source and uses_raw_builder_factory:
+        problems.append(f"{path}: raw NXOpen builder journals should destroy builders after commit or probe")
+    return problems
+
+
+def validate_misleading_primitive_approximation(path: Path, tree: ast.AST, source: str) -> list[str]:
+    lower = (path.name + "\n" + source).lower()
+    if is_low_fidelity_fallback(source):
+        return []
+    looks_smooth = any(term in lower for term in SMOOTH_HIGH_FIDELITY_TERMS)
+    primitive_count = sum(
+        source.count(token)
+        for token in ("polygon_prism_on_plane", "polygon_prism", ".box(", ".oriented_box(", ".cylinder(")
+    )
+    uses_advanced_geometry = any(token in source for token in RAW_ADVANCED_NXOPEN_TERMS) or any(
+        token in lower for token in ("lofted_blade", "swept_blade", "airfoil_section")
+    )
+    if looks_smooth and primitive_count >= 2 and not uses_advanced_geometry:
+        return [
+            f"{path}: misleading primitive approximation; document LOW_FIDELITY_FALLBACK or use raw NXOpen advanced geometry"
+        ]
+    return []
+
+
 def validate_journal(path: Path, *, strict_geometry: bool = False) -> list[str]:
     problems = compile_file(path)
     if problems:
@@ -277,6 +366,7 @@ def validate_journal(path: Path, *, strict_geometry: bool = False) -> list[str]:
     has_main = False
     imports_nxbuilder = False
     calls_export_step = False
+    raw_nxopen = imports_raw_nxopen(tree)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "build":
@@ -300,23 +390,29 @@ def validate_journal(path: Path, *, strict_geometry: bool = False) -> list[str]:
             if module == "cadnx" and any(alias.name == "NXBuilder" for alias in node.names):
                 imports_nxbuilder = True
 
-    if not has_build:
+    wrapper_assisted = imports_nxbuilder or uses_nxbuilder(source)
+
+    if wrapper_assisted and not has_build:
         problems.append(f"{path}: missing required build(output_path: str = None)")
     if not has_main:
         problems.append(f"{path}: missing required main() entry point")
-    if not imports_nxbuilder:
+    if wrapper_assisted and not imports_nxbuilder:
         problems.append(f"{path}: expected `from cadnx import NXBuilder`")
-    if not calls_export_step:
+    if wrapper_assisted and not calls_export_step:
         problems.append(f"{path}: expected a call to NXBuilder.export_step(output_path)")
     if "/Users/albert/" in source or "copilot-cad-test" in source:
         problems.append(f"{path}: generated journal must not hardcode local Mac workspace paths")
     problems.extend(validate_slot_cut_axes(path, tree))
+    if raw_nxopen:
+        problems.extend(validate_raw_nxopen_review_markers(path, tree, source))
+        problems.extend(validate_raw_nxopen_diagnostics(path, tree, source))
     if strict_geometry:
         problems.extend(validate_boolean_overlap_budget(path, tree, source))
         problems.extend(validate_feature_budget(path, tree, source))
         problems.extend(validate_linkage_semantics(path, tree, source))
         problems.extend(validate_rotating_blade_quality(path, source))
         problems.extend(validate_external_component_ledger(path, source))
+        problems.extend(validate_misleading_primitive_approximation(path, tree, source))
 
     return problems
 

@@ -1,5 +1,11 @@
 # NX CAD Advanced Geometry Roadmap
 
+This roadmap is for reusable wrapper helpers. It does not ban raw NXOpen
+journals from using loft, sweep, through-curve, spline, PMI, or other advanced
+NX APIs when MCP API-review evidence supports the code. Wrapper acceptance
+gates decide when helpers become reusable `NXBuilder` methods; they are not a
+ceiling on what an agent may model with direct NXOpen.
+
 ## Principle
 
 Do not add raw NXOpen geometry helpers from memory. Each helper needs an

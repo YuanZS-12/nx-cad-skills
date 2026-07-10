@@ -16,11 +16,13 @@ runtime wrapper import, during modeling, or during STEP export.
    skills/nx-cad/scripts/check-journal models/<journal>.py
    ```
 
-5. If `dc_run_journal` is available, rerun the same journal in NX through MCP
-   and continue the loop from its output.
-6. If MCP runtime tools are unavailable, ask the user to rerun the same journal
-   in NX.
-7. Record new NX compatibility failures in `references/nxopen-common-errors.md`.
+5. Use MCP API-review tools, when available, to inspect suspect NXOpen APIs,
+   known Designcenter patterns, or wrapper signatures involved in the failure.
+6. Do not rerun the same journal in NX through `dc_run_journal`, do not start
+   NX, and do not attempt agent-side runtime execution.
+7. Ask the user to rerun the same journal manually in Siemens NX after the
+   repair and send back the full traceback or success output.
+8. Record new NX compatibility failures in `references/nxopen-common-errors.md`.
 
 ## Failure Classes
 
@@ -55,6 +57,27 @@ Fix:
 - use `getattr` and fallback variants;
 - prefer selection collectors and rules over topology index assumptions;
 - keep the old path when it worked and add a fallback for the reported version.
+
+### Raw NXOpen Journal Failure
+
+Classify raw journal failures more specifically before patching:
+
+- raw NXOpen import/submodule failure;
+- raw builder property or enum mismatch;
+- section/curve construction failure;
+- primary feature commit failure;
+- optional PMI/annotation failure after primary solid creation;
+- save/export failure.
+
+Fix:
+
+- add explicit submodule imports such as `NXOpen.Features` or
+  `NXOpen.Annotations`;
+- use MCP API-review tools to confirm the exact builder, enum, property, and
+  method shape;
+- keep primary solid generation separate from optional PMI so annotation
+  failures do not erase successful geometry;
+- add runtime diagnostics for work part, body/feature count, and output path.
 
 ### Invalid Or Missing Geometry
 
@@ -133,6 +156,7 @@ Tell the user:
 - which file changed;
 - which runtime folder was synced;
 - which local checks ran;
-- which `dc_*` tools reran, if MCP runtime mode was available;
+- which `dc_*` tools were used for API review, if MCP API-review mode was
+  available;
 - which file to copy to the NX machine;
 - what the next NX rerun should prove.

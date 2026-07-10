@@ -36,6 +36,10 @@ def build(output_path: str = None):
     # height = 20
 
     # Modeling
+    # Use NXBuilder calls when they directly match the intended geometry.
+    # Use raw NXOpen builders directly when they produce higher-fidelity NX
+    # geometry; confirm raw API shapes through MCP API-review mode when
+    # available.
     # Agent inserts NXBuilder calls here, e.g.:
     # body = b.box(length, width, height, origin=(0, 0, 0))
     # hole1 = b.hole(8, height + 2, position=(20, 15, height))

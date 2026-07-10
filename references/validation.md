@@ -6,9 +6,9 @@ Read this before reporting success for generated NXOpen journals.
 
 Local validation can prove source structure and runtime freshness. It cannot
 prove Siemens NX execution, native `.prt` save, or STEP export unless the
-journal was actually run inside NX and the user or automation reports the
-result. `dc_run_journal` output from the Designcenter/NXOpen MCP server counts
-as NX runtime evidence when that MCP server is available.
+journal was actually run inside NX and the user reports the result. Agents do
+not start NX and do not call `dc_run_journal`; NX runtime validation is
+user-run only.
 
 ## Local Static Validation
 
@@ -22,8 +22,10 @@ skills/nx-cad/scripts/check-journal models/<journal>.py
 These checks prove:
 
 - the journal is valid Python syntax;
-- the journal imports `cadnx.NXBuilder`;
-- the journal defines `build(output_path: str = None)`;
+- wrapper-assisted journals import `cadnx.NXBuilder` and define
+  `build(output_path: str = None)`;
+- raw NXOpen journals carry `MCP_API_REVIEW` or `STATIC_ONLY_NXOPEN_REVIEW`
+  evidence and required diagnostics;
 - prohibited local CAD kernels are absent;
 - sibling `cadnx/` runtime files compile.
 
@@ -41,9 +43,10 @@ Before coding, list what should be checked in NX:
 - whether cosmetic fillets/chamfers are required or optional;
 - expected `.prt` and `.step` paths.
 
-## NX Runtime Validation
+## User-Run NX Runtime Validation
 
-When `dc_run_journal` is available, run it after local static checks and record:
+After local static checks, hand the journal to the user for manual execution in
+Siemens NX. Ask the user to report:
 
 - whether NX executed the journal;
 - whether warnings or tracebacks were printed;
@@ -51,17 +54,24 @@ When `dc_run_journal` is available, run it after local static checks and record:
 - whether `.step` export was reported;
 - output paths reported by the journal.
 
-When MCP runtime tools are unavailable and the user runs the journal manually
-in Siemens NX, ask for:
-
-- whether geometry appears;
-- whether warnings were printed;
-- whether `.prt` saved;
-- whether `.step` exported;
-- the full traceback for failures.
+Do not run NX through MCP, do not call `dc_run_journal`, and do not try to
+start NX. The user runs journals manually in Siemens NX.
 
 If `.step` exists, it can be inspected with the regular CAD skill tools and CAD
 Viewer. Until then, report local checks only.
+
+## Raw NXOpen evidence
+
+When a generated or repaired journal uses raw `NXOpen.*`, the final response
+must report one of:
+
+- `MCP_API_REVIEW`: list the exact `dc_*` tools used and the API facts checked;
+- `STATIC_ONLY_NXOPEN_REVIEW`: state that MCP tools were unavailable and list
+  the local static checks that ran.
+
+Do not claim NX runtime success unless the user reports a successful manual NX
+run. Report PMI or annotation failures separately from primary solid-generation
+failures.
 
 ## Post-NX CAD Handoff
 
@@ -102,7 +112,7 @@ Final responses for NX CAD generation should include:
 - synced `cadnx/` path;
 - static checks actually run;
 - NX runtime result when available;
-- exact `dc_*` MCP tools called when MCP runtime mode was used;
+- exact `dc_*` MCP tools called when MCP API-review mode was used;
 - CAD `scripts/inspect refs`, `scripts/snapshot`, and `$cad-viewer` results for
   any NX-exported STEP that exists;
 - assumptions and important dimensions;

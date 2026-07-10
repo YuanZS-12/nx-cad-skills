@@ -24,9 +24,13 @@ feature builders, `NXOpen.DexManager`, and `NXOpen.StepCreator`.
   clearer.
 - For blocks, `origin=(x, y, z)` means the lower-left-lower corner of the block.
 
-## Generated File Structure
+## Supported Journal Patterns
 
-Every generated file must follow this shape:
+### Wrapper-assisted journal pattern
+
+Use this when `NXBuilder` operations directly match the requested geometry.
+The generated journal may import `cadnx.NXBuilder`, call wrapper primitives,
+and use `b.export_step(output_path)`.
 
 ```python
 import os
@@ -47,7 +51,7 @@ def build(output_path: str = None):
     b = NXBuilder()
 
     # 1. Parameters: named dimensions
-    # 2. Modeling: NXBuilder calls
+    # 2. Modeling: NXBuilder calls when they directly match intent
     # 3. Export
     if output_path is None:
         output_path = os.path.splitext(os.path.abspath(__file__))[0] + ".step"
@@ -66,6 +70,24 @@ if __name__ == "__main__":
 
 Do not use plain `"output.step"` as the generated default.
 
+### Raw NXOpen journal pattern
+
+Use this when direct NXOpen APIs produce a more faithful model than wrapper
+operations. The journal should:
+
+- include required submodule imports;
+- import every required NXOpen submodule explicitly, such as
+  `NXOpen.Features`, `NXOpen.Annotations`, or `NXOpen.UF`;
+- define `create_work_part_if_needed(session)` when the journal can run without
+  an active part;
+- keep named parameters near the top of `build()` or `main()`;
+- create curves, sections, builders, expressions, PMI, and exports using
+  MCP-reviewed NXOpen API shapes;
+- destroy builders and dispose load/status objects where applicable;
+- make nonessential PMI or cosmetic annotation failures nonblocking when the
+  primary solid is already created;
+- print diagnostics for work part, created bodies/features, and export path.
+
 Structure source:
 
 - `NXOpen.Session.GetSession()` comes from the official `NXOpen.Session`
@@ -74,8 +96,9 @@ Structure source:
 - The `build(output_path: str = None)` and `main()` wrapper are `nx-cad`
   conventions around the official API so generated journals are portable,
   testable, and callable from NX.
-- The sibling `cadnx/` import is a local runtime wrapper convention; raw NXOpen
-  calls remain inside `cadnx.NXBuilder`.
+- The sibling `cadnx/` import is a local runtime wrapper convention for the
+  wrapper-assisted pattern. Raw NXOpen journals may omit it when direct NXOpen
+  builders are the intended modeling surface.
 
 ## Wrapper Operations
 
@@ -130,16 +153,15 @@ mechanical dimensions are still named CAD parameters from the prompt and the
 skill brief, then passed into official NXOpen builder properties through the
 wrapper.
 
-Do not add raw `NXOpen.*` calls to generated journals to achieve industrial
-detail. Generated files should remain small and call `NXBuilder`; compatibility
-work belongs in the wrapper after checking the official Siemens NXOpen Python
-Reference Guide.
+Raw `NXOpen.*` calls are allowed in generated journals when direct NXOpen
+builders produce better geometry than wrapper operations. Compatibility work
+still requires MCP API-review evidence or explicit static-only uncertainty.
 
-Advanced geometry helpers such as `revolved_profile`, curve/spline creation,
-loft, sweep, and semantic blade helpers are roadmap items until
-`references/advanced-geometry-roadmap.md` acceptance gates are met. Do not
-generate those calls as supported production operations until the official
-source map, wrapper tests, local checks, and real NX runtime feedback exist.
+Reusable `NXBuilder` helpers for advanced geometry remain governed by
+`references/advanced-geometry-roadmap.md`. Direct raw NXOpen use of loft,
+sweep, through-curve, spline, PMI, and related APIs is allowed when MCP
+API-review evidence supports the API shape and the journal includes the
+required diagnostics and repair-loop expectations.
 
 ## Parameter Source
 
@@ -210,9 +232,10 @@ thickness before the journal reaches NX.
 
 ## External STEP Components
 
-External STEP import and assembly placement must stay behind `NXBuilder`
-methods. Do not add raw `NXOpen.*` import manager, component assembly, or
-transform calls directly to generated journals.
+External STEP import and assembly placement may use `NXBuilder` methods when
+their guarded contract is sufficient. Raw `NXOpen.*` import manager, component
+assembly, or transform calls are allowed when MCP API-review evidence confirms
+the API shape and the journal reports runtime uncertainty honestly.
 
 The desired generated shape is:
 
