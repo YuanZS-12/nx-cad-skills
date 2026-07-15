@@ -4,9 +4,11 @@ description: Generate Siemens NXOpen Python journals from natural-language CAD s
 ---
 
 > **Runtime**: Generated `.py` files are not executed locally.
-> Copy the generated journal plus its sibling `cadnx/` folder to a machine with
-> Siemens NX installed, then run via NX: File -> Execute -> NX Open. NX builds
-> the model, saves a native `.prt`, and exports a `.step`.
+> Copy the generated journal to a machine with Siemens NX installed, then run
+> via NX: File -> Execute -> NX Open. Wrapper-mode journals also need the
+> sibling `cadnx/` folder. Raw NXOpen high-fidelity journals do not use
+> `cadnx/` unless the generated source explicitly imports it, which this mode
+> should not do.
 > On NX machines where Designcenter/NXOpen MCP tools are expected, start every
 > task by checking whether the `dc_*` tools are exposed in the current agent
 > session. If they are available, use MCP API-review mode for NXOpen lookup and
@@ -16,12 +18,21 @@ description: Generate Siemens NXOpen Python journals from natural-language CAD s
 
 # NX CAD Generation
 
+Provenance: maintained in [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
+Use the installed local skill files as the runtime source of truth; the
+repository link is only for provenance and release review.
+
 ## Purpose
 
 Create NXOpen Python journals from natural-language CAD requirements. This skill
 follows the text-to-cad CAD workflow style: natural-language brief, parametric
 source, explicit assumptions, generated artifacts, and repair-loop discipline.
 The implementation target is Siemens NXOpen Python, not build123d.
+
+Generated journals under `models/` are task source outputs. Native `.prt` files
+and `.step` exports are Siemens NX runtime artifacts; do not claim they exist,
+loaded, saved, exported, or validated unless the user reports a manual NX run or
+a downstream check inspects the actual NX-created artifact.
 
 Generated files should be portable NX journals. They may use raw NXOpen
 directly, or may use a small local wrapper package when wrapper operations are
@@ -35,8 +46,9 @@ models/
         builder.py
 ```
 
-`cadnx.NXBuilder` is optional. It is a local wrapper around official Siemens
-`NXOpen` APIs for simple robust primitives, guards, and STEP export convenience.
+NXBuilder is optional. `cadnx.NXBuilder` is a local wrapper around official
+Siemens `NXOpen` APIs for simple robust primitives, guards, and STEP export
+convenience.
 
 ## Use This Skill When
 
@@ -117,11 +129,25 @@ that official guide and update the source map with the relevant official page.
 Do not rely on memory, forum snippets, translated examples, or non-Siemens
 pages for raw NXOpen code shape.
 
-Raw NXOpen is allowed when it is the better modeling path for the requested
-part. NXBuilder is optional: use it for simple robust primitives, common
-guards, and STEP export convenience, but do not force high-fidelity geometry
-through wrapper operations when direct NXOpen builders are clearer or more
-capable.
+This skill has two generation modes:
+
+- **Wrapper mode** is the default when the user asks for `nx-cad` without
+  requesting MCP-backed raw NXOpen. Use `NXBuilder` for simple robust
+  primitives, common guards, and STEP export convenience.
+- **Raw NXOpen high-fidelity mode** is required when the user asks to use MCP,
+  `dc_server`, Designcenter, raw/bare `NXOpen`, `NXOpen lib`, or explicitly asks
+  for high-fidelity NXOpen code. In this mode, generate direct `NXOpen.*`
+  journal code, do not import or use `cadnx.NXBuilder`, and include
+  `RAW_NXOPEN_HIGH_FIDELITY = True` plus either `MCP_API_REVIEW` or
+  `STATIC_ONLY_NXOPEN_REVIEW` in the journal.
+
+Raw NXOpen is therefore not a fallback for only special geometry. It is the
+MCP-backed high-fidelity route for any part class when the prompt asks for that
+route. Wrapper mode remains the stable default route when the prompt does not
+request MCP-backed raw NXOpen.
+
+Raw NXOpen is allowed when selected by the prompt route above or when explicit
+static-only uncertainty is recorded for a repair or compatibility fixture.
 
 When raw `NXOpen.*` code is written or revised and Designcenter/NXOpen MCP
 tools are available, use MCP API-review mode and record MCP API-review
@@ -176,18 +202,27 @@ journal on the NX machine.
 
 1. Classify the request: new part, assembly, modification, NX repair, or export
    issue.
-2. Run the MCP discovery gate from `references/mcp-runtime.md` when
+2. Select generation mode before planning:
+   - use **raw NXOpen high-fidelity mode** when the prompt requests MCP,
+     `dc_server`, Designcenter, raw/bare `NXOpen`, `NXOpen lib`, or high
+     fidelity NXOpen code;
+   - otherwise use **wrapper mode** unless the user explicitly forbids
+     `NXBuilder`.
+3. Run the MCP discovery gate from `references/mcp-runtime.md` when
    Designcenter/NXOpen MCP tools are expected, the user mentions MCP, or the
    task is running on an NX machine:
    - if any `dc_*` API lookup tools are exposed, enter MCP API-review mode;
    - if none are exposed, state that before writing code and continue in
      static-only mode.
-3. Load only the needed references:
+4. Load only the needed references:
    - official Siemens API source mapping:
      `references/official-nxopen-sources.md`
    - natural-language brief: `references/natural-language-specs.md`
+   - design ledger: `references/design-ledger.md`
    - parameter and feature planning: `references/parameters.md`
    - NXOpen modeling calls: `references/nxopen-modeling.md`
+   - raw NXOpen high-fidelity route:
+     `references/raw-nxopen-quality.md`
    - advanced geometry roadmap:
      `references/advanced-geometry-roadmap.md`
    - aerospace casing/frame modeling:
@@ -204,12 +239,14 @@ journal on the NX machine.
    - repeated API failures: `references/nxopen-common-errors.md`
    - benchmark regression work: `references/benchmark-workflow.md`
    - catalog STEP components: `references/external-step-parts.md`
-4. Create a concise internal CAD-NX brief: independent parameters, derived
+5. Create a concise internal CAD-NX brief: independent parameters, derived
    parameters, coordinate convention, industrial intent, manufacturing style,
    feature order, external component ledger, output name, assumptions, local
    static validation, official API source needs, and NX runtime validation
-   targets.
-5. Plan before coding:
+   targets. Use `references/design-ledger.md` when the part has raw NXOpen API
+   use, nontrivial frames/datums, external parts, PMI, assemblies, or
+   user-reported NX runtime failures.
+6. Plan before coding:
    - primary solids before holes/cutouts;
    - functional and manufacturability details before cosmetic-only details;
    - booleans before cosmetic detail;
@@ -218,48 +255,51 @@ journal on the NX machine.
    - named external components resolved through `$step-parts` before simplified
      cylinders, boxes, or envelope geometry;
    - fillets/chamfers last and conservative;
-   - choose the highest-fidelity NXOpen modeling route that matches the
-     requested geometry;
-   - use `NXBuilder` only when its operation directly matches the intended
-     feature;
-   - use raw NXOpen builders directly when wrapper operations would downgrade
-     the part into misleading primitive approximations;
+   - in raw NXOpen high-fidelity mode, use direct NXOpen builders, collections,
+     curves, sections, expressions, PMI, assembly, save, and export APIs as
+     appropriate for the requested model;
+   - in raw NXOpen high-fidelity mode, do not use `NXBuilder` operations;
+   - in wrapper mode, use `NXBuilder` only when its operation directly matches
+     the intended feature;
    - record MCP API-review evidence for raw NXOpen in the final response.
-6. In MCP API-review mode, use at least one discovery tool
+7. In MCP API-review mode, use at least one discovery tool
    (`dc_search`, `dc_semantic_search`, or `dc_lookup_pattern`) before writing
    the journal. Use `dc_get_api_info` before any raw NXOpen API or wrapper
    extension. If MCP tools are unavailable, do not fabricate MCP evidence.
-7. Generate a single NXOpen Python journal using
-   `templates/nxopen_part_template.py`.
-8. Save the journal under `<repo>/models/<task_name>.py`.
-9. Sync the runtime wrapper:
+8. Generate a single NXOpen Python journal:
+   - wrapper mode uses `templates/nxopen_part_template.py`;
+   - raw NXOpen high-fidelity mode uses
+     `templates/raw_nxopen_part_template.py`.
+9. Save the journal under `<repo>/models/<task_name>.py`.
+10. Sync the runtime wrapper only for wrapper mode or when checking repository
+   runtime freshness:
    `skills/nx-cad/scripts/sync-runtime --models-dir models`.
-10. Run local static checks:
+11. Run local static checks:
    `skills/nx-cad/scripts/check-journal models/<task_name>.py`.
    For newly generated industrial/mechanical journals, also run strict geometry
    budget checks:
    `skills/nx-cad/scripts/check-journal models/<task_name>.py --strict-geometry`.
-11. In MCP API-review mode, follow `references/mcp-runtime.md`: use
+12. In MCP API-review mode, follow `references/mcp-runtime.md`: use
    `dc_run_snippet` only for short API probes or static review snippets that do
    not launch full NX model generation. Do not run `dc_run_journal`, start NX,
    or attempt agent-side runtime execution.
-12. Do not claim NX execution. Tell the user exactly which journal and sibling
-   `cadnx/` folder to copy to the NX machine and what the manual NX rerun
-   should prove.
-13. If MCP API-review tools are unavailable, do not claim MCP review. Tell the
-   user exactly which journal and sibling `cadnx/` folder to copy to the NX
-   machine.
-14. If the user reports an NX traceback, repair the smallest responsible
+13. Do not claim NX execution. Tell the user exactly which journal to copy to
+   the NX machine. For wrapper mode, also copy the sibling `cadnx/` folder. For
+   raw NXOpen high-fidelity mode, do not require `cadnx/`.
+14. If MCP API-review tools are unavailable, do not claim MCP review. Tell the
+   user exactly which journal to copy to the NX machine, and whether `cadnx/`
+   is needed for the selected mode.
+15. If the user reports an NX traceback, repair the smallest responsible
    section of either the generated journal or `cadnx/builder.py`, sync
    `models/cadnx/`, use MCP API-review tools to inspect suspect NXOpen APIs
    when available, and ask the user to rerun manually in Siemens NX.
 
 ## NXOpen Code Rules
 
-- Use `from cadnx import NXBuilder` and `b = NXBuilder()` when wrapper
-  operations directly match the intended geometry. Use raw NXOpen directly when
-  it produces better NX geometry and MCP API-review evidence is available or
-  static-only uncertainty is explicitly recorded.
+- Use `from cadnx import NXBuilder` and `b = NXBuilder()` only in wrapper mode.
+- In raw NXOpen high-fidelity mode, do not import `cadnx` or instantiate
+  `NXBuilder`; use direct `NXOpen.*` APIs and include
+  `RAW_NXOPEN_HIGH_FIDELITY = True`.
 - Do not import build123d, CadQuery, OCC, FreeCAD, OpenSCAD, or local CAD
   kernels.
 - Wrapper-assisted generated files must define `build(output_path: str = None)`
@@ -267,6 +307,9 @@ journal on the NX machine.
 - Raw NXOpen generated files must define a clear `main()` entry point, explicit
   required NXOpen submodule imports, work-part handling, runtime diagnostics,
   and save/export handling when export is part of the task.
+- Raw NXOpen generated files that use builders must wrap builder lifecycles in
+  `try/finally` and call `Destroy()`. Load/status objects returned by part
+  creation or open calls must be disposed when present.
 - If an output path is generated, set it to the generated journal basename with
   `.step`.
 - Put all named dimensions near the top of `build()` or `main()`.
@@ -287,12 +330,12 @@ journal on the NX machine.
 - Use named boolean robustness parameters such as `through_overcut`,
   `feature_overlap`, and `cutter_overlap` so subtractive and united tools form
   real volume intersections instead of tangent or face-only contact.
-- Prefer simple robust primitives and booleans over fragile low-level NXOpen
-  builder sequences in generated journals.
-- Avoid generated calls to raw NXOpen APIs unless `NXBuilder` lacks the needed
-  operation and the reference confirms the pattern.
+- In wrapper mode, prefer simple robust primitives and booleans over fragile
+  low-level NXOpen builder sequences in generated journals.
+- In raw NXOpen high-fidelity mode, use reviewed native NXOpen builders and
+  collections directly; do not route the model through wrapper primitives.
 - Keep `models/cadnx/` synchronized with `skills/nx-cad/cadnx/` after
-  generating or changing an output script.
+  generating or changing a wrapper-mode output script.
 - `b.slot_cut()` currently requires both `axis` and `direction` to be
   axis-aligned unit vectors. Do not generate radial, diagonal, or trig-derived
   slot directions. For angled cosmetic witness marks, traceability marks, or
@@ -343,11 +386,11 @@ Prefer these `NXBuilder` calls:
 
 If a model needs an unsupported feature, either compose it from supported
 solids/booleans or extend `cadnx.NXBuilder` first, then sync the runtime.
-External assembly component placement is not a raw journal operation yet. Use
-the guarded `NXBuilder` contract documented in
-`references/external-step-parts.md`, and only replace those guards with working
-NXOpen calls after official Siemens API research and real NX runtime
-validation.
+In raw NXOpen high-fidelity mode, unsupported wrapper features should become
+direct NXOpen operations only after MCP API-review or explicit static-only
+uncertainty. External assembly component placement may use raw NXOpen APIs in
+that mode when the API shape is reviewed and the journal reports runtime
+uncertainty honestly.
 
 ## Repair Loop
 
@@ -372,7 +415,9 @@ When NX reports an error:
 
 - Output source must be NXOpen-compatible Python, not build123d.
 - Generated journals must run inside Siemens NX, not normal Python.
-- Keep `.py` journal and `cadnx/` wrapper together when moving to NX.
+- Keep `.py` journal and `cadnx/` wrapper together when moving wrapper-mode
+  journals to NX. Raw NXOpen high-fidelity journals should not require
+  `cadnx/`.
 - Never claim a journal has run in NX unless the user reports a manual Siemens
   NX run.
 - Do not call `dc_run_journal`; runtime evidence comes from the user's manual
@@ -393,10 +438,15 @@ Load these files only when their trigger applies:
   Guide pages used as the source for journal structure, builder calls, and STEP
   export APIs.
 - `references/natural-language-specs.md` - prose-to-CAD brief conversion.
+- `references/design-ledger.md` - internal ledger for generation mode,
+  parameters, datums, API evidence, output paths, and NX runtime checks.
 - `references/parameters.md` - parameter naming, derived dimensions, feature
   grouping, and common parameter failures.
 - `references/nxopen-modeling.md` - journal structure, wrapper operations,
   coordinate conventions, and robust modeling rules.
+- `references/raw-nxopen-quality.md` - direct NXOpen high-fidelity route used
+  when the prompt asks for MCP, `dc_server`, Designcenter, raw/bare `NXOpen`,
+  `NXOpen lib`, or high-fidelity NXOpen code.
 - `references/advanced-geometry-roadmap.md` - staged research and acceptance
   gates for revolve, curves/splines, loft, sweep, and blade helpers.
 - `references/aerospace-frame-modeling.md` - special guidance for aerospace
@@ -425,8 +475,9 @@ Load these files only when their trigger applies:
 - `references/benchmark-workflow.md` - repo benchmark prompts, local static
   gates, NX runtime reporting, and repair policy.
 
-Final responses should include generated `.py` path, `models/cadnx/` sync
-status, syntax checks actually run, Designcenter/NXOpen MCP API-review result
-when available, the exact `dc_*` tools called, assumptions, exactly what to copy
-to the NX machine, and a clear statement that the user must run the journal
-manually in Siemens NX for runtime validation.
+Final responses should include generated `.py` path, selected mode, whether
+`models/cadnx/` is synced or not required, syntax checks actually run,
+Designcenter/NXOpen MCP API-review result when available, the exact `dc_*`
+tools called, assumptions, exactly what to copy to the NX machine, and a clear
+statement that the user must run the journal manually in Siemens NX for runtime
+validation.

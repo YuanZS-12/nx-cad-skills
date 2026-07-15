@@ -70,11 +70,21 @@ if __name__ == "__main__":
 
 Do not use plain `"output.step"` as the generated default.
 
-### Raw NXOpen journal pattern
+### Raw NXOpen high-fidelity journal pattern
 
-Use this when direct NXOpen APIs produce a more faithful model than wrapper
-operations. The journal should:
+This is the Raw NXOpen journal pattern for MCP-backed high-fidelity generation.
 
+Use this when the prompt asks to use MCP, `dc_server`, Designcenter, raw/bare
+`NXOpen`, `NXOpen lib`, or high-fidelity NXOpen code. This route is available
+for any part class and is not limited to smooth or advanced geometry. The
+journal must not import `cadnx` or use `NXBuilder`.
+
+Use `templates/raw_nxopen_part_template.py` as the starting point. The journal
+should:
+
+- include `RAW_NXOPEN_HIGH_FIDELITY = True`;
+- include `MCP_API_REVIEW` when `dc_*` tools were used, or
+  `STATIC_ONLY_NXOPEN_REVIEW` when they were unavailable;
 - include required submodule imports;
 - import every required NXOpen submodule explicitly, such as
   `NXOpen.Features`, `NXOpen.Annotations`, or `NXOpen.UF`;
@@ -87,6 +97,7 @@ operations. The journal should:
 - make nonessential PMI or cosmetic annotation failures nonblocking when the
   primary solid is already created;
 - print diagnostics for work part, created bodies/features, and export path.
+- avoid `cadnx.NXBuilder` entirely.
 
 Structure source:
 
@@ -97,8 +108,7 @@ Structure source:
   conventions around the official API so generated journals are portable,
   testable, and callable from NX.
 - The sibling `cadnx/` import is a local runtime wrapper convention for the
-  wrapper-assisted pattern. Raw NXOpen journals may omit it when direct NXOpen
-  builders are the intended modeling surface.
+  wrapper-assisted pattern. Raw NXOpen high-fidelity journals should omit it.
 
 ## Wrapper Operations
 
